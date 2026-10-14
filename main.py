@@ -1,17 +1,32 @@
 import os 
+import asyncio 
 from typing import TypedDict, Annotated
 import operator
+import uuid
+import logging
+import httpx
 import psycopg
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.postgres import PostgresSaver
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage,SystemMessage
 from langchain_openai import ChatOpenAI
 import uuid
-from tools.tavily_tool import tavily_search
-from tools.flight_tool import search_flights, find_airport
+#from tools.tavily_tool import tavily_search
+from mcp_client import tavily_mcp_search
+#from tools.flight_tool import search_flights, find_airport
 from dotenv import load_dotenv
-
+from mcp_client import(
+    tavily_mcp_search,
+    get_airlines,
+    avaiation_mcp_call,
+    find_airport,
+    extract_route
+)
 load_dotenv()
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("langchain_mcp_adapters").setLevel(logging.WARNING)
 
 llm = ChatOpenAI()
 
@@ -25,10 +40,91 @@ class State(TypedDict):
     itinerary: str
     llm_calls: int
 
+FLIGHT_AGENT_PROMPT = """
+You are a travel flight expert.
+
+Your task is to understand the user's travel request and provide relevant flight information using the available tools.
+
+User Query:
+{query}
+
+Airport Information:
+{airport_data}
+
+Airline Information:
+{airline_data}
+
+Instructions:
+1. Identify the departure city and destination city from the user's query.
+2. Use the airport information to identify the correct IATA codes for both cities.
+3. If the departure city or destination is missing, ask the user for clarification.
+4. Use the available flight tools to retrieve relevant flight information for the requested route.
+5. Use airline information to identify airline names when needed.
+6. Never invent flight details, prices, timings, availability, or airline information.
+7. If the available tools cannot retrieve flights for the requested route, clearly explain the limitation.
+8. Present the results in a clear and organized format, including the airline, flight number, departure and arrival airports, timings, and flight status whenever the tool provides these details.
+9. Keep your response concise, accurate, and focused on the user's requested route.
+10. Clearly distinguish between live flight information and historical flight information.
+
+Return only information supported by the user's query and tool results.
+"""
+
+
 
 def flight_agent(state: State) -> State:
     query = state['query']
-    flight_data = search_flights(query)
+    #flight_data = search_flights(query)
+
+    try:
+        route = extract_route(query)
+
+        if route.get('error'):
+            flight_data = route['error']
+
+        else:
+            origin_iata = route['origin_iata']
+            destination_iata = route['destination_iata']
+
+            departures = asyncio.run(
+                avaiation_mcp_call(
+                    'future_flights_arrival_departure_schedule',
+                    {
+                        'airport_iata_code': origin_iata,
+                        'schedule_type': 'departure',
+                        'number_of_flights': 10
+                    }
+                )
+            )
+
+            arrivals = asyncio.run(
+                avaiation_mcp_call(
+                    'future_flights_arrival_departure_schedule',
+                    {
+                        'airport_iata_code': destination_iata,
+                        'schedule_type': 'arrival',
+                        'number_of_flights': 10
+                    }
+                )
+            )
+
+            prompt = FLIGHT_AGENT_PROMPT.format(
+                query = query,
+                airport_data = str(departures)[:3000],
+                airline_data = str(arrivals)[:3000]
+            )
+
+            response = llm.invoke([
+                SystemMessage(
+                    content='You are an expert travel flight planner.'
+                ),
+                HumanMessage(content=prompt)
+            ])
+
+            flight_data = response.content
+
+    except Exception as e:
+        flight_data = f"Flight information unavailable: {str(e)}"
+
     return{
         'flight_results': flight_data,
         'messages': [
@@ -52,7 +148,10 @@ amenities, and official booking links when available.
 Do not invent prices, ratings, or availability.
 """
 
-    hotel_results = tavily_search(query)
+    #hotel_results = tavily_search(query)
+    hotel_results = asyncio.run(
+        tavily_mcp_search(query)
+    )
 
     return {
         "hotel_results": hotel_results,
@@ -238,10 +337,10 @@ app = graph.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
     config = {
-        'configurable': {
-            'thread_id': 'user_divya'
-        }
+    "configurable": {
+        "thread_id": str(uuid.uuid4())
     }
+}
 
     user_input = input("Enter your travel request: ")
 
@@ -258,5 +357,4 @@ if __name__ == "__main__":
     )
 
     print('\n FINAL RESPONSE: \n')
-    for msg in result['messages']:
-        print(msg.content)
+    print(result["messages"][-1].content)

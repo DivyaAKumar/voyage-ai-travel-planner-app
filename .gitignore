@@ -8,9 +8,15 @@
 __pycache__/
 *.py[cod]
 
-# Virtual environment
+# Python virtual environments
 .venv/
+.venv_new/
 venv/
+
+# Ignore nested virtual environments (e.g. aviationstack-mcp)
+**/.venv/
+**/.venv_new/
+**/venv/
 
 # Streamlit secrets
 .streamlit/secrets.toml

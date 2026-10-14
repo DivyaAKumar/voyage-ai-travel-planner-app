@@ -1,0 +1,26 @@
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv_new/
+venv/
+
+# API keys and environment variables
+.env
+.env.*
+!.env.example
+
+# Coverage
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
