@@ -1,0 +1,12 @@
+# Voyage — AI Travel Planner
+# Install with: pip install -r requirements.txt
+
+streamlit
+langgraph
+langgraph-checkpoint-postgres
+psycopg[binary]
+langchain-core
+langchain-openai
+python-dotenv
+tavily-python
+requests
